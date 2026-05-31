@@ -19,13 +19,14 @@ import pandas as pd
 import math
 import json
 from pathlib import Path
-from data_loader import load_raw, load_alerts
+import data_loader
 import warnings
 warnings.filterwarnings("ignore")
 
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+from tqdm.auto import tqdm
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"[neural_hawkes_v2] Device: {DEVICE}")
@@ -367,21 +368,22 @@ class NeuralHawkesTrainer:
         
         return nll + self.reg_weight * reg_loss, nll.item(), reg_loss.item()
     
-    def fit(self, train_sessions, n_epochs=50, batch_size=32, verbose=True):
+    def fit(self, train_sessions, n_epochs=50, batch_size=32, verbose=True, desc="Train"):
         dataset = HawkesDatasetV2(train_sessions)
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, 
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
                            num_workers=0, pin_memory=True)
-        
+
         self.model.train()
         best_loss = float('inf')
         patience_counter = 0
         best_state = None
-        
-        for epoch in range(n_epochs):
+
+        epoch_bar = tqdm(range(n_epochs), desc=desc, disable=not verbose, leave=True)
+        for epoch in epoch_bar:
             total_nll = 0
             total_reg = 0
             n_batches = 0
-            
+
             for batch in loader:
                 features = batch["features"].to(self.device)
                 times = batch["times"].to(self.device)
@@ -389,41 +391,45 @@ class NeuralHawkesTrainer:
                 time_to_end = batch["time_to_end"].to(self.device)
                 mask = batch["mask"].to(self.device)
                 padding_mask = batch["padding_mask"].to(self.device)
-                
+
                 intensity, time_pred, _ = self.model(features, times, delta_times, padding_mask)
                 loss, nll_val, reg_val = self.combined_loss(
                     intensity, time_pred, delta_times, time_to_end, mask
                 )
-                
+
                 self.optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 self.optimizer.step()
-                
+
                 total_nll += nll_val
                 total_reg += reg_val
                 n_batches += 1
-            
+
+            avg_nll = total_nll / n_batches
             avg_reg = total_reg / n_batches
             self.scheduler.step()
-            
+
             if avg_reg < best_loss - 1e-4:
                 best_loss = avg_reg
                 patience_counter = 0
                 best_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
             else:
                 patience_counter += 1
-            
-            if verbose and (epoch + 1) % 10 == 0:
-                avg_nll = total_nll / n_batches
-                lr = self.optimizer.param_groups[0]['lr']
-                print(f"  Epoch {epoch+1}/{n_epochs} | NLL: {avg_nll:.4f} | Reg: {avg_reg:.4f} | LR: {lr:.2e}")
-            
+
+            epoch_bar.set_postfix(
+                nll=f"{avg_nll:.4f}",
+                reg=f"{avg_reg:.4f}",
+                best=f"{best_loss:.4f}",
+                lr=f"{self.optimizer.param_groups[0]['lr']:.1e}",
+                pat=patience_counter,
+            )
+
             if patience_counter >= 15:
-                if verbose:
-                    print(f"  Early stopping at epoch {epoch+1}")
+                epoch_bar.write(f"  Early stopping at epoch {epoch+1}")
+                epoch_bar.close()
                 break
-        
+
         if best_state is not None:
             self.model.load_state_dict(best_state)
         return self
@@ -531,7 +537,7 @@ def evaluate_all_variants(sessions, test_ratio=0.2):
     print("=" * 60)
     model_gru = NeuralHawkesGRUv2(input_dim=12, hidden_dim=64, dropout=0.1)
     trainer_gru = NeuralHawkesTrainer(model_gru, lr=5e-4, reg_weight=1.0)
-    trainer_gru.fit(train_sessions, n_epochs=80, batch_size=32)
+    trainer_gru.fit(train_sessions, n_epochs=80, batch_size=32, desc="V1 GRU")
     r = evaluate_model(trainer_gru, test_sessions, "GRU v2 (12 feat., multi-tâche)")
     if r: all_results["gru_v2"] = r
     torch.save(model_gru.state_dict(), str(MODEL_DIR / "neural_hawkes_gru_v2.pt"))
@@ -545,7 +551,7 @@ def evaluate_all_variants(sessions, test_ratio=0.2):
         dim_feedforward=128, dropout=0.1
     )
     trainer_tf = NeuralHawkesTrainer(model_tf, lr=5e-4, reg_weight=1.0)
-    trainer_tf.fit(train_sessions, n_epochs=80, batch_size=32)
+    trainer_tf.fit(train_sessions, n_epochs=80, batch_size=32, desc="V2 TF")
     r = evaluate_model(trainer_tf, test_sessions, "Transformer (d=64, 3L)")
     if r: all_results["transformer"] = r
     torch.save(model_tf.state_dict(), str(MODEL_DIR / "neural_hawkes_transformer.pt"))
@@ -559,7 +565,7 @@ def evaluate_all_variants(sessions, test_ratio=0.2):
         dim_feedforward=256, dropout=0.15
     )
     trainer_tf_lg = NeuralHawkesTrainer(model_tf_lg, lr=3e-4, reg_weight=1.0)
-    trainer_tf_lg.fit(train_sessions, n_epochs=80, batch_size=32)
+    trainer_tf_lg.fit(train_sessions, n_epochs=80, batch_size=32, desc="V3 TF-Large")
     r = evaluate_model(trainer_tf_lg, test_sessions, "Transformer Large (d=128, 4L)")
     if r: all_results["transformer_large"] = r
     torch.save(model_tf_lg.state_dict(), str(MODEL_DIR / "neural_hawkes_transformer_large.pt"))
@@ -590,7 +596,7 @@ def evaluate_all_variants(sessions, test_ratio=0.2):
             dim_feedforward=128, dropout=0.1
         )
         trainer_ap = NeuralHawkesTrainer(model_ap, lr=5e-4, reg_weight=1.0)
-        trainer_ap.fit(ap_train, n_epochs=80, batch_size=min(16, len(ap_train)))
+        trainer_ap.fit(ap_train, n_epochs=80, batch_size=min(16, len(ap_train)), desc=f"V4 {airport}")
         r = evaluate_model(trainer_ap, ap_test, f"Local → {airport}")
         
         if r and r["errors_df"] is not None:
@@ -653,8 +659,8 @@ if __name__ == "__main__":
     print("=" * 60)
     
     print("\nLoading data...")
-    df = load_raw()
-    alerts = load_alerts(df)
+    df = data_loader.load_raw()
+    alerts = data_loader.load_alerts(df)
     
     print("Preparing enriched sessions (12 features)...")
     sessions = prepare_sessions_v2(alerts)
