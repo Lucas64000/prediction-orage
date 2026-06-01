@@ -115,6 +115,13 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     num_cols = res.select_dtypes(exclude="category").columns
     res[num_cols] = res[num_cols].fillna(0)
 
+    # is_last_lightning_cloud_ground est une colonne source (object avec bool+NaN)
+    # qui bloque la sérialisation parquet. On la supprime ; is_last_cg (booléen
+    # nullable) en est déjà la version parsée.
+    res = res.drop(columns=["is_last_lightning_cloud_ground"], errors="ignore")
+    if "is_last_cg" in res.columns:
+        res["is_last_cg"] = res["is_last_cg"].astype("boolean")
+
     return res
 
 
