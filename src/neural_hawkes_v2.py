@@ -478,7 +478,7 @@ def evaluate_model(trainer, test_sessions, label="Model"):
             )
             errors.append({
                 "true": true_remaining, "pred": pred_remaining,
-                "airport": airport, "frac": frac
+                "airport": airport, "airport_alert_id": session.get("alert_id"), "frac": frac
             })
     
     df = pd.DataFrame(errors)

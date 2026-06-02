@@ -489,6 +489,7 @@ def evaluate_gaussian_model(
                         "pred": mean_pred,
                         "uncertainty": std_pred,
                         "airport": airport,
+                        "airport_alert_id": session.get("alert_id"),
                         "frac": frac,
                     }
                 )
@@ -503,6 +504,7 @@ def evaluate_gaussian_model(
                         "true": true_remaining,
                         "pred": pred,
                         "airport": airport,
+                        "airport_alert_id": session.get("alert_id"),
                         "frac": frac,
                     }
                 )
