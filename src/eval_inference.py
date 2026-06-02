@@ -327,16 +327,21 @@ def run_tabular_inference(
 
 
 def baseline_predictions(alerts: pd.DataFrame) -> pd.DataFrame:
-    """Baseline 30 min : prédit, à chaque éclair, une fin à +30 min (règle actuelle).
+    """Baseline 30 min : fin d'alerte = dernier éclair + 30 min (règle métier actuelle).
 
-    Sert d'ancre (gain 0, risque 0) : la prédiction la plus précoce retenue est
-    `dernier_éclair + 30 min`, donc jamais avant la fin réelle de l'alerte.
+    UNE seule prédiction par alerte (et non une par éclair) : le protocole retient
+    la fin prédite la plus précoce par alerte, donc émettre `éclair + 30` à chaque
+    éclair ferait retenir `premier_éclair + 30` au lieu de `dernier_éclair + 30`.
+    Avec `dernier_éclair + 30`, la baseline est bien l'ancre attendue : gain 0 et
+    risque 0 (aucun éclair après la fin, par construction).
     """
-    base = alerts[["airport", "airport_alert_id", "date"]].copy()
-    base = base.rename(columns={"date": "prediction_date"})
-    base["predicted_date_end_alert"] = base["prediction_date"] + pd.Timedelta(minutes=30)
-    base["confidence"] = 1.0
-    return base[PREDICTION_COLS]
+    last = (
+        alerts.groupby(["airport", "airport_alert_id"])["date"].max().reset_index()
+    )
+    last = last.rename(columns={"date": "prediction_date"})
+    last["predicted_date_end_alert"] = last["prediction_date"] + pd.Timedelta(minutes=30)
+    last["confidence"] = 1.0
+    return last[PREDICTION_COLS]
 
 
 def run_all_inference(
