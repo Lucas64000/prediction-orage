@@ -53,6 +53,11 @@ def _prepare_alerts(alerts_df: pd.DataFrame, min_dist_km: float) -> pd.DataFrame
     alerts = alerts_df.copy()
     alerts["date"] = pd.to_datetime(alerts["date"], utc=True)
     alerts["icloud"] = alerts["icloud"].astype(bool)
+    # Caster en str : un groupby sur une colonne catégorielle (airport l'est après
+    # build_features) produit le PRODUIT CARTÉSIEN des catégories → des couples
+    # (aéroport, alerte) fantômes absents des données. Le str évite ce piège.
+    alerts["airport"] = alerts["airport"].astype(str)
+    alerts["airport_alert_id"] = alerts["airport_alert_id"].astype(str)
     return alerts
 
 
@@ -84,6 +89,9 @@ def evaluate_theta_sweep(
     preds["predicted_date_end_alert"] = pd.to_datetime(
         preds["predicted_date_end_alert"], utc=True
     )
+    # Même précaution que pour les alertes : pas de clé de groupby catégorielle.
+    preds["airport"] = preds["airport"].astype(str)
+    preds["airport_alert_id"] = preds["airport_alert_id"].astype(str)
     alerts = _prepare_alerts(alerts_df, min_dist_km)
 
     # Dénominateur N : éclairs en zone, restreints aux alertes que le modèle couvre.
